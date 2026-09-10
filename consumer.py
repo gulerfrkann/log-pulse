@@ -2,6 +2,7 @@ import os
 import json
 import pika
 import docker
+import requests
 import google.generativeai as genai
 from dotenv import load_dotenv
 from plyer import notification
@@ -16,6 +17,9 @@ if not API_KEY:
 
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel("gemini-3.5-flash")
+
+# Dashboard API URL adresi
+DASHBOARD_API_URL = "http://localhost:8000/api/logs"
 
 # Docker istemcisini başlatıyoruz
 try:
@@ -37,6 +41,24 @@ def send_windows_notification(title, message):
         )
     except Exception as e:
         print(f"[HATA] Windows bildirimi gösterilemedi: {e}")
+
+def send_to_dashboard(log_data, ai_analysis=None):
+    """
+    Log verisini ve AI analizini FastAPI dashboard sunucusuna iletir.
+    """
+    payload = {
+        "service": log_data.get("service", "unknown-service"),
+        "level": log_data.get("level", "INFO"),
+        "message": log_data.get("message", ""),
+        "cpu_usage": log_data.get("cpu_usage", 0.0),
+        "memory_usage": log_data.get("memory_usage", 0.0),
+        "ai_analysis": ai_analysis
+    }
+    try:
+        requests.post(DASHBOARD_API_URL, json=payload, timeout=2)
+    except Exception:
+        # Dashboard açık olmayabilir, ana akışı bozmamak için hatayı yutuyoruz
+        pass
 
 def restart_container(container_name):
     """
@@ -78,8 +100,11 @@ def analyze_log_with_ai(log_data):
 
     print(f"\n[CONSUMER] Log Alındı -> Servis: {service} | Seviye: {log_level} | Mesaj: {message}")
 
+    ai_analysis_text = None
+
     if log_level == "INFO":
         print("[AI BYPASS] Log normal durumda, müdahaleye gerek yok.")
+        send_to_dashboard(log_data, ai_analysis=None)
         return
 
     prompt = f"""
@@ -101,9 +126,13 @@ def analyze_log_with_ai(log_data):
     print("[AI ANALİZ] Anomali yakalandı, Gemini API'ye gönderiliyor...")
     try:
         response = model.generate_content(prompt)
+        ai_analysis_text = response.text
         print("\n--- 🤖 GEMINI OTONOM ANALİZİ ---")
-        print(response.text)
+        print(ai_analysis_text)
         print("----------------------------------\n")
+        
+        # Dashboard'a analiz ile birlikte gönder
+        send_to_dashboard(log_data, ai_analysis=ai_analysis_text)
         
         if log_level == "ERROR":
             print("[OTONOM AKSİYON] Hata tespit edildi, otomatik kurtarma prosedürü tetikleniyor...")
@@ -111,6 +140,7 @@ def analyze_log_with_ai(log_data):
             
     except Exception as e:
         print(f"Gemini API hatası: {e}")
+        send_to_dashboard(log_data, ai_analysis=f"Analiz hatası: {e}")
 
 def callback(ch, method, properties, body):
     try:
@@ -125,7 +155,7 @@ def main():
     channel = connection.channel()
     channel.queue_declare(queue='log_queue', durable=True)
 
-    print('[*] LogPulse AI Consumer (Plyer Toast Entegreli) başlatıldı. Kuyruk dinleniyor...')
+    print('[*] LogPulse AI Consumer (Dashboard Entegreli) başlatıldı. Kuyruk dinleniyor...')
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(queue='log_queue', on_message_callback=callback)
     channel.start_consuming()
