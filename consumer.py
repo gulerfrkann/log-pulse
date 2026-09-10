@@ -1,6 +1,7 @@
 import os
 import json
 import pika
+import docker
 import google.generativeai as genai
 from dotenv import load_dotenv
 
@@ -15,7 +16,33 @@ if not API_KEY:
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel("gemini-3.5-flash")
 
-# (Geri kalan consumer fonksiyonların aynı kalabilir...)
+# Docker istemcisini başlatıyoruz (Yerel Docker daemon'a bağlanır)
+try:
+    docker_client = docker.from_env()
+except Exception as e:
+    print(f"[UYARI] Docker bağlantısı kurulamadı: {e}")
+    docker_client = None
+
+def restart_container(container_name):
+    """
+    Belirtilen Docker konteynerini otomatik olarak yeniden başlatır.
+    """
+    if not docker_client:
+        print("[HATA] Docker istemcisi aktif değil, otomatik yeniden başlatma yapılamadı.")
+        return False
+    
+    try:
+        container = docker_client.containers.get(container_name)
+        print(f"[OTONOM İŞLEM] '{container_name}' konteyneri yeniden başlatılıyor...")
+        container.restart()
+        print(f"[BAŞARILI] '{container_name}' başarıyla yeniden başlatıldı!")
+        return True
+    except docker.errors.NotFound:
+        print(f"[HATA] '{container_name}' adında çalışan bir konteyner bulunamadı.")
+        return False
+    except Exception as e:
+        print(f"[HATA] Konteyner yeniden başlatılırken hata oluştu: {e}")
+        return False
 
 def analyze_log_with_ai(log_data):
     """
@@ -57,6 +84,12 @@ def analyze_log_with_ai(log_data):
         print("\n--- 🤖 GEMINI OTONOM ANALİZİ ---")
         print(response.text)
         print("----------------------------------\n")
+        
+        # Otonom İyileştirme: Hata durumunda log gelen servisi otomatik olarak restart et
+        if log_level == "ERROR":
+            print("[OTONOM AKSİYON] Hata tespit edildi, otomatik kurtarma prosedürü tetikleniyor...")
+            restart_container(service)
+            
     except Exception as e:
         print(f"Gemini API hatası: {e}")
 
