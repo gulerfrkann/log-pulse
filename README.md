@@ -1,39 +1,41 @@
 # LogPulse
 
-LogPulse is an autonomous DevOps and AI-driven system management agent designed for real-time log monitoring, root cause analysis, and automated self-healing actions. Built with Go, RabbitMQ, Python, Docker SDK, and Google Gemini API.
+LogPulse, gerçek zamanlı log izleme, yapay zeka destekli kök neden analizi (RCA), otonom iyileştirme (self-healing) aksiyonları ve anlık masaüstü bildirimleri gerçekleştiren otonom bir DevOps ve sistem yönetim ajanıdır. Go, RabbitMQ, Python, Docker SDK ve Google Gemini API kullanılarak geliştirilmiştir.
 
 ---
 
-##  Architecture & Workflow
+##  Mimari ve İş Akışı
 
-1. **Log Producer (Go)**: Simulates microservice log generation (both normal operations and anomalous errors) and publishes them to a message broker.
-2. **Message Broker (RabbitMQ)**: Handles reliable queueing and fair dispatch of system logs.
-3. **AI Consumer & Agent (Python)**: Consumes logs from RabbitMQ, evaluates system metrics (CPU/Memory), and interfaces with the Gemini API when anomalies occur.
-4. **Autonomous Self-Healing (Docker SDK)**: Automatically triggers container recovery actions (such as restarting degraded or crashed services) based on real-time AI diagnosis.
-
----
-
-##  Tech Stack
-
-* **Language (Producer)**: Go
-* **Language (Consumer/AI Agent)**: Python
-* **Message Broker**: RabbitMQ
-* **Container Orchestration**: Docker & Docker SDK for Python
-* **Artificial Intelligence**: Google Gemini API (`gemini-3.5-flash`)
-* **Environment Management**: `python-dotenv`, `pika`
+1. **Log Üretici (Go)**: Mikroservis log simülasyonu yapar (normal operasyonlar ve anomali hataları) ve bunları mesaj kuyruğuna yayınlar.
+2. **Mesaj Broker (RabbitMQ)**: Sistem loglarının güvenilir bir şekilde kuyruklanmasını ve adil bir şekilde dağıtılmasını sağlar.
+3. **Yapay Zeka Tüketicisi ve Ajan (Python)**: Logları RabbitMQ'dan tüketir, sistem metriklerini (CPU/Bellek) değerlendirir ve anomali durumlarında Gemini API ile iletişime geçer.
+4. **Otonom İyileştirme (Docker SDK)**: Gerçek zamanlı yapay zeka teşhisine dayanarak konteyner kurtarma aksiyonlarını (bozulmuş veya çökmüş servisleri yeniden başlatma gibi) otomatik olarak tetikler.
+5. **Masaüstü Bildirimleri (Plyer)**: Otonom bir iyileştirme aksiyonu başarıyla gerçekleştirildiğinde yerel Windows bildirimleri aracılığıyla operatörleri anında bilgilendirir.
 
 ---
 
-##  Getting Started
+##  Teknoloji Yığını
 
-### Prerequisites
+* **Dil (Üretici):** Go
+* **Dil (Tüketici / Yapay Zeka Ajanı):** Python
+* **Mesaj Broker:** RabbitMQ
+* **Konteyner Yönetimi:** Docker & Docker SDK for Python
+* **Yapay Zeka:** Google Gemini API (`gemini-3.5-flash`)
+* **Masaüstü Bildirimleri:** `plyer`
+* **Ortam Yönetimi:** `python-dotenv`, `pika`
+
+---
+
+##  Başlangıç
+
+### Gereksinimler
 
 * Go (1.18+)
 * Python (3.9+)
 * Docker & Docker Compose
-* Gemini API Key
+* Gemini API Anahtarı
 
-### 1. Clone the Repository
+### 1. Repoyu Klonlayın
 
 ```bash
 git clone [https://github.com/gulerfrkann/log-pulse.git](https://github.com/gulerfrkann/log-pulse.git)
