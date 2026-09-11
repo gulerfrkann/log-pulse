@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from db import log_audit_action
 import json
 import docker
 
@@ -35,8 +36,20 @@ async def approve_action(payload: dict):
     try:
         container = docker_client.containers.get(service_name)
         container.restart()
+        
+        # PostgreSQL Denetim (Audit) Tablosuna Başarılı Müdahaleyi Kaydet
+        try:
+            log_audit_action(
+                incident_id=None,
+                service_name=service_name,
+                action="DOCKER_CONTAINER_RESTART",
+                operator="operator_admin"
+            )
+        except Exception as db_err:
+            print(f"[AUDIT HATA] Denetim izi yazılamadı: {db_err}")
+
         print(f"[İNSAN ONAYI] '{service_name}' kullanıcı tarafından onaylandı ve yeniden başlatıldı.")
-        return {"status": "success", "message": f"'{service_name}' başarıyla yeniden başlatıldı."}
+        return {"status": "success", "message": f"'{service_name}' başarıyla yeniden başlatıldı ve denetim tablosuna işlendi."}
     except docker.errors.NotFound:
         raise HTTPException(status_code=404, detail=f"'{service_name}' konteyneri bulunamadı.")
     except Exception as e:

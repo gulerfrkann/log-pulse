@@ -10,40 +10,39 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from sentence_transformers import SentenceTransformer
 
-# .env dosyasındaki değişkenleri yüklüyoruz
+# PostgreSQL Çok Tablolu Veri Erişim Katmanı
+from db import log_incident_and_get_context
+
 load_dotenv()
 
 API_KEY = os.getenv("GEMINI_API_KEY")
-
 if not API_KEY:
     raise ValueError("GEMINI_API_KEY bulunamadı! Lütfen .env dosyasını kontrol edin.")
 
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel("gemini-3.5-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
-# Dashboard API URL adresi
 DASHBOARD_API_URL = "http://localhost:8000/api/logs"
 
-# Qdrant ve Embedding Modelini Başlatıyoruz (RAG Hafızası)
+# Qdrant ve Embedding Modeli (RAG Vektör Hafızası)
 try:
     qdrant_client = QdrantClient(host="localhost", port=6333)
     embedder = SentenceTransformer('all-MiniLM-L6-v2')
     COLLECTION_NAME = "logpulse_memory"
     
-    # Koleksiyon yoksa oluşturalım (Boyut: 384)
     collections = [c.name for c in qdrant_client.get_collections().collections]
     if COLLECTION_NAME not in collections:
         qdrant_client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE)
         )
-    print("[QDRANT] RAG Hafıza sistemi başarıyla aktifleşti.")
+    print("[QDRANT] RAG Hafıza sistemi aktif.")
 except Exception as e:
     print(f"[UYARI] Qdrant bağlantısı kurulamadı: {e}")
     qdrant_client = None
     embedder = None
 
-# Docker istemcisini başlatıyoruz
+# Docker İstemcisi
 try:
     docker_client = docker.from_env()
 except Exception as e:
@@ -51,9 +50,6 @@ except Exception as e:
     docker_client = None
 
 def send_windows_notification(title, message):
-    """
-    Plyer kütüphanesi ile Windows masaüstü bildirimi gönderir.
-    """
     try:
         notification.notify(
             title=title,
@@ -65,9 +61,6 @@ def send_windows_notification(title, message):
         print(f"[HATA] Windows bildirimi gösterilemedi: {e}")
 
 def send_to_dashboard(log_data, ai_analysis=None):
-    """
-    Log verisini ve AI analizini FastAPI dashboard sunucusuna iletir.
-    """
     payload = {
         "service": log_data.get("service", "unknown-service"),
         "level": log_data.get("level", "INFO"),
@@ -79,13 +72,9 @@ def send_to_dashboard(log_data, ai_analysis=None):
     try:
         requests.post(DASHBOARD_API_URL, json=payload, timeout=2)
     except Exception:
-        # Dashboard açık olmayabilir, ana akışı bozmamak için hatayı yutuyoruz
         pass
 
 def search_memory(error_message):
-    """
-    Qdrant üzerinde benzer geçmiş hataları ve çözümleri anlamsal olarak arar.
-    """
     if not qdrant_client or not embedder:
         return []
     try:
@@ -97,7 +86,7 @@ def search_memory(error_message):
         )
         memories = []
         for hit in hits:
-            if hit.score > 0.70: # Benzerlik eşik değeri
+            if hit.score > 0.70:
                 memories.append(f"- Geçmiş Hata: {hit.payload.get('message')} | Çözüm: {hit.payload.get('solution')}")
         return memories
     except Exception as e:
@@ -105,9 +94,6 @@ def search_memory(error_message):
         return []
 
 def save_memory(error_message, solution_text):
-    """
-    Çözülen hatayı ve Gemini'nin çözümünü Qdrant vektör veritabanına kaydeder.
-    """
     if not qdrant_client or not embedder:
         return
     try:
@@ -125,40 +111,9 @@ def save_memory(error_message, solution_text):
                 )
             ]
         )
-        print("[QDRANT] Yeni hata ve çözüm hafızaya (vektör veritabanına) başarıyla kaydedildi.")
+        print("[QDRANT] Çözüm deneyimi vektör hafızasına kaydedildi.")
     except Exception as e:
         print(f"[HATA] Hafızaya kayıt yapılamadı: {e}")
-
-def restart_container(container_name):
-    """
-    Belirtilen Docker konteynerini otomatik olarak yeniden başlatır ve masaüstü bildirimi atar.
-    """
-    if not docker_client:
-        print("[HATA] Docker istemcisi aktif değil, otomatik yeniden başlatma yapılamadı.")
-        send_windows_notification("❌ LogPulse Uyarı", f"'{container_name}' için Docker aktif değil!")
-        return False
-    
-    try:
-        container = docker_client.containers.get(container_name)
-        print(f"[OTONOM İŞLEM] '{container_name}' konteyneri yeniden başlatılıyor...")
-        container.restart()
-        print(f"[BAŞARILI] '{container_name}' başarıyla yeniden başlatıldı!")
-        
-        # Windows Masaüstü Bildirimi Gönder
-        send_windows_notification(
-            title="🤖 LogPulse Otonom Onarım",
-            message=f"'{container_name}' servisi çöktü. RAG hafızası ile desteklenerek otomatik onarıldı!"
-        )
-        return True
-        
-    except docker.errors.NotFound:
-        print(f"[HATA] '{container_name}' adında çalışan bir konteyner bulunamadı.")
-        send_windows_notification("❌ LogPulse Uyarı", f"'{container_name}' konteyneri bulunamadı!")
-        return False
-    except Exception as e:
-        print(f"[HATA] Konteyner yeniden başlatılırken hata oluştu: {e}")
-        send_windows_notification("❌ LogPulse Hata", f"'{container_name}' yeniden başlatılamadı!")
-        return False
 
 def analyze_log_with_ai(log_data):
     log_level = log_data.get("level", "INFO")
@@ -167,55 +122,75 @@ def analyze_log_with_ai(log_data):
     cpu = log_data.get("cpu_usage", 0.0)
     memory = log_data.get("memory_usage", 0.0)
 
-    print(f"\n[CONSUMER] Log Alındı -> Servis: {service} | Seviye: {log_level} | Mesaj: {message}")
-
-    ai_analysis_text = None
+    print(f"\n[CONSUMER] Log Alındı -> Servis: {service} | Seviye: {log_level} | CPU: %{cpu} | RAM: %{memory}")
 
     if log_level == "INFO":
-        print("[AI BYPASS] Log normal durumda, müdahaleye gerek yok.")
+        print("[AI BYPASS] Normal işlem logu, analiz atlandı.")
         send_to_dashboard(log_data, ai_analysis=None)
         return
 
-    # Qdrant RAG Hafızasından benzer geçmiş hataları sorgula
+    # 1. PostgreSQL Çok Tablolu İlişkisel Bağlamı (JOIN) Çek
+    db_context_text = "Veritabanı ilişkisel bağlamı alınamadı."
+    try:
+        incident_id, context = log_incident_and_get_context(
+            service_name=service,
+            level=log_level,
+            message=message,
+            cpu=cpu,
+            memory=memory
+        )
+        db_context_text = f"""- Servis Katmanı (Tier): {context.get('tier')}
+- Donanım Limitleri: Maksimum Bellek {context.get('max_memory_mb')}MB | Kritik CPU Eşiği %{context.get('max_cpu_percent')}
+- Son 1 Saatteki Toplam Hata Sayısı: {context.get('total_incidents_last_hour')}
+- En Son Operatör Müdahalesi: {context.get('last_remediation_action') or 'Yok'} (Onaylayan: {context.get('last_operator') or 'N/A'}, Durum: {context.get('last_remediation_status') or 'N/A'})"""
+    except Exception as e:
+        print(f"[DB UYARI] PostgreSQL kayıt/bağlam hatası: {e}")
+
+    # 2. Qdrant Vektör Hafızasını Tara (RAG)
     past_memories = search_memory(message)
-    memory_context = "\n".join(past_memories) if past_memories else "Daha önce benzer bir kayıt bulunamadı (İlk vaka)."
+    memory_context = "\n".join(past_memories) if past_memories else "Benzer bir geçmiş vaka bulunamadı (İlk kayıt)."
 
+    # 3. İlişkisel Graf + Vektör Hafızası ile Hibrit Prompt Oluştur
     prompt = f"""
-    You are an autonomous DevOps AI agent named LogPulse equipped with a long-term vector memory (RAG). 
-    Analyze the current system log by considering your past experiences and solutions.
+Sen LogPulse otonom AIOps ajanısın. Hem uzun vadeli vektör hafızasına (Qdrant RAG) hem de kurumsal ilişkisel sistem veritabanına (PostgreSQL) erişimin var.
 
-    Historical Similar Incidents & Solutions:
-    {memory_context}
+[SİSTEM İLİŞKİSEL GRAF & TELEMETRİ BAĞLAMI]
+{db_context_text}
 
-    Current Log Data:
-    - Service: {service}
-    - Level: {log_level}
-    - Message: {message}
-    - CPU Usage: {cpu}%
-    - Memory Usage: {memory}%
+[QDRANT RAG HAFIZA KAYITLARI]
+{memory_context}
 
-    Provide your response in a clear, concise structure:
-    1. Root Cause: (Why did this happen?)
-    2. Suggested Action: (What command or action should be executed via Docker API?)
-    """
+[GÜNCEL HATA TELEMETRİSİ]
+- Servis: {service}
+- Hata Seviyesi: {log_level}
+- Mesaj: {message}
+- Anlık CPU Tüketimi: %{cpu}
+- Anlık Bellek Tüketimi: %{memory}
 
-    print("[AI ANALİZ] Anomali yakalandı, RAG bağlamı ile Gemini API'ye gönderiliyor...")
+Yukarıdaki donanım eşiklerini, son 1 saatteki hata sıklığını ve geçmiş müdahaleleri analiz ederek şu formatta yanıt üret:
+1. Kök Neden (Root Cause): (Hatanın donanım limiti, bellek sızıntısı veya kod bazlı teknik nedeni)
+2. Önerilen Aksiyon (Suggested Action): (Docker API veya sistem seviyesinde operatör onayına sunulacak kurtarma adımı)
+"""
+
+    print("[AI ANALİZ] İlişkisel sistem grafı ve RAG bağlamı Gemini API'ye iletiliyor...")
     try:
         response = model.generate_content(prompt)
         ai_analysis_text = response.text
-        print("\n--- 🤖 GEMINI OTONOM & HAFIZALI ANALİZİ ---")
+        print("\n--- 🤖 GEMINI İLİŞKİSEL & RAG ANALİZİ ---")
         print(ai_analysis_text)
-        print("------------------------------------------\n")
+        print("----------------------------------------\n")
         
-        # Dashboard'a analiz ile birlikte gönder
+        # Dashboard'a operatör onayına sunmak üzere gönder
         send_to_dashboard(log_data, ai_analysis=ai_analysis_text)
-        
-        if log_level == "ERROR":
-            print("[OTONOM AKSİYON] Hata tespit edildi, otomatik kurtarma prosedürü tetikleniyor...")
-            success = restart_container(service)
-            if success:
-                # Başarılı onarım sonrası bu deneyimi Qdrant hafızasına kaydet
-                save_memory(message, ai_analysis_text)
+
+        # Windows Masaüstü Bildirimi Gönder
+        send_windows_notification(
+            title=f"⚠️ LogPulse Olayı: {service}",
+            message=f"Hata frekansı değerlendirildi. İnsan onayı bekleniyor!"
+        )
+
+        # Çözüm önerisini vektör hafızasına kaydet
+        save_memory(message, ai_analysis_text)
             
     except Exception as e:
         print(f"Gemini API hatası: {e}")
@@ -234,7 +209,7 @@ def main():
     channel = connection.channel()
     channel.queue_declare(queue='log_queue', durable=True)
 
-    print('[*] LogPulse RAG-Powered AI Consumer başlatıldı. Kuyruk dinleniyor...')
+    print('[*] LogPulse PostgreSQL + RAG Hibrit AI Consumer aktif. Kuyruk dinleniyor...')
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(queue='log_queue', on_message_callback=callback)
     channel.start_consuming()
