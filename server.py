@@ -5,20 +5,17 @@ import docker
 
 app = FastAPI(title="LogPulse Dashboard")
 
-# Docker istemcisini başlatıyoruz
 try:
     docker_client = docker.from_env()
 except Exception as e:
     print(f"[UYARI] Docker bağlantısı kurulamadı: {e}")
     docker_client = None
 
-# Son gelen logları ve analizleri saklamak için bellek içi liste
 latest_logs = []
 
 @app.post("/api/logs")
 async def receive_log(data: dict):
     global latest_logs
-    # Yeni log gelirken varsayılan olarak onay durumu 'pending' (beklemede) olabilir
     data["approved"] = False
     latest_logs.insert(0, data)
     if len(latest_logs) > 50:
@@ -31,9 +28,6 @@ async def get_logs():
 
 @app.post("/api/approve")
 async def approve_action(payload: dict):
-    """
-    Kullanıcı dashboard üzerinden onay verdiğinde Docker konteynerini tetikler.
-    """
     service_name = payload.get("service")
     if not docker_client:
         raise HTTPException(status_code=500, detail="Docker istemcisi aktif değil.")
@@ -59,7 +53,58 @@ async def dashboard():
         <title>LogPulse - Autonomous DevOps Dashboard</title>
         <!-- Tailwind CSS CDN -->
         <script src="https://cdn.tailwindcss.com"></script>
+        <!-- Chart.js CDN -->
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <script>
+            let metricsChart;
+
+            function initChart() {
+                const ctx = document.getElementById('metricsChart').getContext('2d');
+                metricsChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [
+                            {
+                                label: 'CPU Kullanımı (%)',
+                                borderColor: 'rgb(99, 102, 241)',
+                                backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                                data: [],
+                                tension: 0.3,
+                                fill: true
+                            },
+                            {
+                                label: 'Bellek Kullanımı (%)',
+                                borderColor: 'rgb(6, 182, 212)',
+                                backgroundColor: 'rgba(6, 182, 212, 0.1)',
+                                data: [],
+                                tension: 0.3,
+                                fill: true
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100,
+                                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                ticks: { color: '#9ca3af' }
+                            },
+                            x: {
+                                grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                                ticks: { color: '#9ca3af' }
+                            }
+                        },
+                        plugins: {
+                            legend: { labels: { color: '#e5e7eb' } }
+                        }
+                    }
+                });
+            }
+
             async function fetchLogs() {
                 try {
                     let response = await fetch('/api/logs');
@@ -72,7 +117,17 @@ async def dashboard():
                         return;
                     }
 
-                    logs.forEach((log, index) => {
+                    // Grafiği güncellemek için verileri tersten (kronolojik) alıyoruz
+                    let chartLabels = [];
+                    let cpuData = [];
+                    let memoryData = [];
+
+                    logs.slice().reverse().forEach(log => {
+                        let timeLabel = new Date().toLocaleTimeString(); // veya log zamanı varsa o
+                        chartLabels.push(timeLabel);
+                        cpuData.push(log.cpu_usage);
+                        memoryData.push(log.memory_usage);
+
                         let isError = log.level === 'ERROR';
                         let borderColor = isError ? 'border-red-500 bg-red-950/20' : 'border-green-500 bg-gray-900';
                         let badgeColor = isError ? 'bg-red-600 text-white animate-pulse' : 'bg-green-600 text-white';
@@ -105,6 +160,15 @@ async def dashboard():
                         `;
                         container.innerHTML += card;
                     });
+
+                    // Chart.js verilerini güncelle
+                    if (metricsChart) {
+                        metricsChart.data.labels = chartLabels;
+                        metricsChart.data.datasets[0].data = cpuData;
+                        metricsChart.data.datasets[1].data = memoryData;
+                        metricsChart.update();
+                    }
+
                 } catch (err) {
                     console.error("Loglar çekilirken hata oluştu:", err);
                 }
@@ -139,9 +203,11 @@ async def dashboard():
                 }
             }
 
-            // Her 2 saniyede bir paneli otomatik güncelle
-            setInterval(fetchLogs, 2000);
-            window.onload = fetchLogs;
+            window.onload = () => {
+                initChart();
+                fetchLogs();
+                setInterval(fetchLogs, 2000);
+            };
         </script>
     </head>
     <body class="bg-gray-950 text-gray-100 font-sans min-h-screen p-6">
@@ -160,13 +226,23 @@ async def dashboard():
                 </div>
             </header>
 
-            <main>
-                <div class="flex justify-between items-center mb-4">
-                    <h2 class="text-sm font-bold uppercase tracking-wider text-gray-400">Canlı Sistem Akışı & AI Raporları</h2>
-                    <span class="text-xs text-gray-500">Her 2 saniyede bir yenilenir</span>
+            <main class="space-y-6">
+                <!-- Canlı Metrik Grafik Alanı -->
+                <div class="bg-gray-900 p-4 rounded-xl border border-gray-800 shadow-lg">
+                    <h2 class="text-sm font-bold uppercase tracking-wider text-gray-400 mb-3">Anlık Sistem Kaynak Kullanımı (CPU & Bellek)</h2>
+                    <div class="relative h-64 w-full">
+                        <canvas id="metricsChart"></canvas>
+                    </div>
                 </div>
-                <div id="log-container" class="space-y-3">
-                    <!-- Loglar buraya dinamik dolacak -->
+
+                <div>
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-sm font-bold uppercase tracking-wider text-gray-400">Canlı Sistem Akışı & AI Raporları</h2>
+                        <span class="text-xs text-gray-500">Her 2 saniyede bir yenilenir</span>
+                    </div>
+                    <div id="log-container" class="space-y-3">
+                        <!-- Loglar buraya dinamik dolacak -->
+                    </div>
                 </div>
             </main>
         </div>
