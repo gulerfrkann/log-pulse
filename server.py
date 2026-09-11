@@ -1,8 +1,16 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 import json
+import docker
 
 app = FastAPI(title="LogPulse Dashboard")
+
+# Docker istemcisini başlatıyoruz
+try:
+    docker_client = docker.from_env()
+except Exception as e:
+    print(f"[UYARI] Docker bağlantısı kurulamadı: {e}")
+    docker_client = None
 
 # Son gelen logları ve analizleri saklamak için bellek içi liste
 latest_logs = []
@@ -10,6 +18,8 @@ latest_logs = []
 @app.post("/api/logs")
 async def receive_log(data: dict):
     global latest_logs
+    # Yeni log gelirken varsayılan olarak onay durumu 'pending' (beklemede) olabilir
+    data["approved"] = False
     latest_logs.insert(0, data)
     if len(latest_logs) > 50:
         latest_logs.pop()
@@ -18,6 +28,25 @@ async def receive_log(data: dict):
 @app.get("/api/logs")
 async def get_logs():
     return latest_logs
+
+@app.post("/api/approve")
+async def approve_action(payload: dict):
+    """
+    Kullanıcı dashboard üzerinden onay verdiğinde Docker konteynerini tetikler.
+    """
+    service_name = payload.get("service")
+    if not docker_client:
+        raise HTTPException(status_code=500, detail="Docker istemcisi aktif değil.")
+    
+    try:
+        container = docker_client.containers.get(service_name)
+        container.restart()
+        print(f"[İNSAN ONAYI] '{service_name}' kullanıcı tarafından onaylandı ve yeniden başlatıldı.")
+        return {"status": "success", "message": f"'{service_name}' başarıyla yeniden başlatıldı."}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail=f"'{service_name}' konteyneri bulunamadı.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
@@ -43,7 +72,7 @@ async def dashboard():
                         return;
                     }
 
-                    logs.forEach(log => {
+                    logs.forEach((log, index) => {
                         let isError = log.level === 'ERROR';
                         let borderColor = isError ? 'border-red-500 bg-red-950/20' : 'border-green-500 bg-gray-900';
                         let badgeColor = isError ? 'bg-red-600 text-white animate-pulse' : 'bg-green-600 text-white';
@@ -61,6 +90,15 @@ async def dashboard():
                                             <span>🤖</span> Gemini Otonom Analiz & Kök Neden:
                                         </div>
                                         <pre class="whitespace-pre-wrap text-gray-300">${log.ai_analysis}</pre>
+                                        
+                                        ${isError ? `
+                                            <div class="mt-3 pt-3 border-t border-gray-800 flex justify-between items-center">
+                                                <span class="text-yellow-400 font-semibold">⚠️ İnsan Onayı Bekleniyor (Human-in-the-Loop)</span>
+                                                <button onclick="approveAction('${log.service}', this)" class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-1.5 rounded transition shadow-lg text-xs flex items-center gap-1.5">
+                                                    <span>🚀</span> Onayla ve Uygula
+                                                </button>
+                                            </div>
+                                        ` : ''}
                                     </div>
                                 ` : ''}
                             </div>
@@ -69,6 +107,35 @@ async def dashboard():
                     });
                 } catch (err) {
                     console.error("Loglar çekilirken hata oluştu:", err);
+                }
+            }
+
+            async function approveAction(serviceName, buttonElement) {
+                if (!confirm(`'${serviceName}' servisini yeniden başlatmak istediğinize emin misiniz?`)) return;
+                
+                buttonElement.disabled = true;
+                buttonElement.innerText = "İşleniyor...";
+                
+                try {
+                    let response = await fetch('/api/approve', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ service: serviceName })
+                    });
+                    let result = await response.json();
+                    if (response.ok) {
+                        alert("Başarılı: " + result.message);
+                        buttonElement.innerText = "✅ Uygulandı";
+                        buttonElement.className = "bg-green-600 text-white font-bold px-4 py-1.5 rounded text-xs cursor-not-allowed";
+                    } else {
+                        alert("Hata: " + result.detail);
+                        buttonElement.disabled = false;
+                        buttonElement.innerText = "🚀 Onayla ve Uygula";
+                    }
+                } catch (err) {
+                    alert("Bağlantı hatası oluştu!");
+                    buttonElement.disabled = false;
+                    buttonElement.innerText = "🚀 Onayla ve Uygula";
                 }
             }
 
