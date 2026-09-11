@@ -6,6 +6,9 @@ import requests
 import google.generativeai as genai
 from dotenv import load_dotenv
 from plyer import notification
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from sentence_transformers import SentenceTransformer
 
 # .env dosyasındaki değişkenleri yüklüyoruz
 load_dotenv()
@@ -20,6 +23,25 @@ model = genai.GenerativeModel("gemini-3.5-flash")
 
 # Dashboard API URL adresi
 DASHBOARD_API_URL = "http://localhost:8000/api/logs"
+
+# Qdrant ve Embedding Modelini Başlatıyoruz (RAG Hafızası)
+try:
+    qdrant_client = QdrantClient(host="localhost", port=6333)
+    embedder = SentenceTransformer('all-MiniLM-L6-v2')
+    COLLECTION_NAME = "logpulse_memory"
+    
+    # Koleksiyon yoksa oluşturalım (Boyut: 384)
+    collections = [c.name for c in qdrant_client.get_collections().collections]
+    if COLLECTION_NAME not in collections:
+        qdrant_client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE)
+        )
+    print("[QDRANT] RAG Hafıza sistemi başarıyla aktifleşti.")
+except Exception as e:
+    print(f"[UYARI] Qdrant bağlantısı kurulamadı: {e}")
+    qdrant_client = None
+    embedder = None
 
 # Docker istemcisini başlatıyoruz
 try:
@@ -60,6 +82,53 @@ def send_to_dashboard(log_data, ai_analysis=None):
         # Dashboard açık olmayabilir, ana akışı bozmamak için hatayı yutuyoruz
         pass
 
+def search_memory(error_message):
+    """
+    Qdrant üzerinde benzer geçmiş hataları ve çözümleri anlamsal olarak arar.
+    """
+    if not qdrant_client or not embedder:
+        return []
+    try:
+        vector = embedder.encode(error_message).tolist()
+        hits = qdrant_client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=vector,
+            limit=2
+        )
+        memories = []
+        for hit in hits:
+            if hit.score > 0.70: # Benzerlik eşik değeri
+                memories.append(f"- Geçmiş Hata: {hit.payload.get('message')} | Çözüm: {hit.payload.get('solution')}")
+        return memories
+    except Exception as e:
+        print(f"[HATA] Hafıza sorgulanırken hata oluştu: {e}")
+        return []
+
+def save_memory(error_message, solution_text):
+    """
+    Çözülen hatayı ve Gemini'nin çözümünü Qdrant vektör veritabanına kaydeder.
+    """
+    if not qdrant_client or not embedder:
+        return
+    try:
+        vector = embedder.encode(error_message).tolist()
+        count_res = qdrant_client.count(collection_name=COLLECTION_NAME)
+        point_id = count_res.count + 1
+        
+        qdrant_client.upsert(
+            collection_name=COLLECTION_NAME,
+            points=[
+                models.PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={"message": error_message, "solution": solution_text}
+                )
+            ]
+        )
+        print("[QDRANT] Yeni hata ve çözüm hafızaya (vektör veritabanına) başarıyla kaydedildi.")
+    except Exception as e:
+        print(f"[HATA] Hafızaya kayıt yapılamadı: {e}")
+
 def restart_container(container_name):
     """
     Belirtilen Docker konteynerini otomatik olarak yeniden başlatır ve masaüstü bildirimi atar.
@@ -78,7 +147,7 @@ def restart_container(container_name):
         # Windows Masaüstü Bildirimi Gönder
         send_windows_notification(
             title="🤖 LogPulse Otonom Onarım",
-            message=f"'{container_name}' servisi çöktü. AI analizi ile otomatik olarak yeniden başlatıldı!"
+            message=f"'{container_name}' servisi çöktü. RAG hafızası ile desteklenerek otomatik onarıldı!"
         )
         return True
         
@@ -107,11 +176,18 @@ def analyze_log_with_ai(log_data):
         send_to_dashboard(log_data, ai_analysis=None)
         return
 
+    # Qdrant RAG Hafızasından benzer geçmiş hataları sorgula
+    past_memories = search_memory(message)
+    memory_context = "\n".join(past_memories) if past_memories else "Daha önce benzer bir kayıt bulunamadı (İlk vaka)."
+
     prompt = f"""
-    You are an autonomous DevOps AI agent named LogPulse. 
-    Analyze the following system log and telemetry data to find the root cause and suggest a recovery action.
-    
-    Log Data:
+    You are an autonomous DevOps AI agent named LogPulse equipped with a long-term vector memory (RAG). 
+    Analyze the current system log by considering your past experiences and solutions.
+
+    Historical Similar Incidents & Solutions:
+    {memory_context}
+
+    Current Log Data:
     - Service: {service}
     - Level: {log_level}
     - Message: {message}
@@ -123,20 +199,23 @@ def analyze_log_with_ai(log_data):
     2. Suggested Action: (What command or action should be executed via Docker API?)
     """
 
-    print("[AI ANALİZ] Anomali yakalandı, Gemini API'ye gönderiliyor...")
+    print("[AI ANALİZ] Anomali yakalandı, RAG bağlamı ile Gemini API'ye gönderiliyor...")
     try:
         response = model.generate_content(prompt)
         ai_analysis_text = response.text
-        print("\n--- 🤖 GEMINI OTONOM ANALİZİ ---")
+        print("\n--- 🤖 GEMINI OTONOM & HAFIZALI ANALİZİ ---")
         print(ai_analysis_text)
-        print("----------------------------------\n")
+        print("------------------------------------------\n")
         
         # Dashboard'a analiz ile birlikte gönder
         send_to_dashboard(log_data, ai_analysis=ai_analysis_text)
         
         if log_level == "ERROR":
             print("[OTONOM AKSİYON] Hata tespit edildi, otomatik kurtarma prosedürü tetikleniyor...")
-            restart_container(service)
+            success = restart_container(service)
+            if success:
+                # Başarılı onarım sonrası bu deneyimi Qdrant hafızasına kaydet
+                save_memory(message, ai_analysis_text)
             
     except Exception as e:
         print(f"Gemini API hatası: {e}")
@@ -155,7 +234,7 @@ def main():
     channel = connection.channel()
     channel.queue_declare(queue='log_queue', durable=True)
 
-    print('[*] LogPulse AI Consumer (Dashboard Entegreli) başlatıldı. Kuyruk dinleniyor...')
+    print('[*] LogPulse RAG-Powered AI Consumer başlatıldı. Kuyruk dinleniyor...')
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(queue='log_queue', on_message_callback=callback)
     channel.start_consuming()
