@@ -1,38 +1,40 @@
 # LogPulse
 
-LogPulse, gerçek zamanlı log izleme, yapay zeka destekli kök neden analizi (RCA), otonom iyileştirme (self-healing) aksiyonları ve anlık masaüstü bildirimleri gerçekleştiren otonom bir DevOps ve sistem yönetim ajanıdır. Go, RabbitMQ, Python, Docker SDK ve Google Gemini API kullanılarak geliştirilmiştir.
+LogPulse, gerçek zamanlı log izleme, yapay zeka destekli kök neden analizi, otonom iyileştirme aksiyonları, vektör tabanlı hafıza yönetimi ve insan onay mekanizması gerçekleştiren otonom bir DevOps ve sistem yönetim ajanıdır. Go, RabbitMQ, Python, Qdrant, Docker SDK ve Google Gemini API kullanılarak geliştirilmiştir.
 
 ---
 
-##  Mimari ve İş Akışı
+## Mimari ve İş Akışı
 
-1. **Log Üretici (Go)**: Mikroservis log simülasyonu yapar (normal operasyonlar ve anomali hataları) ve bunları mesaj kuyruğuna yayınlar.
-2. **Mesaj Broker (RabbitMQ)**: Sistem loglarının güvenilir bir şekilde kuyruklanmasını ve adil bir şekilde dağıtılmasını sağlar.
-3. **Yapay Zeka Tüketicisi ve Ajan (Python)**: Logları RabbitMQ'dan tüketir, sistem metriklerini (CPU/Bellek) değerlendirir ve anomali durumlarında Gemini API ile iletişime geçer.
-4. **Otonom İyileştirme (Docker SDK)**: Gerçek zamanlı yapay zeka teşhisine dayanarak konteyner kurtarma aksiyonlarını (bozulmuş veya çökmüş servisleri yeniden başlatma gibi) otomatik olarak tetikler.
-5. **Masaüstü Bildirimleri (Plyer)**: Otonom bir iyileştirme aksiyonu başarıyla gerçekleştirildiğinde yerel Windows bildirimleri aracılığıyla operatörleri anında bilgilendirir.
+1. **Log Üretici (Go)**: Mikroservis log simülasyonu yapar ve bunları mesaj kuyruğuna yayınlar.
+2. **Mesaj Broker (RabbitMQ)**: Sistem loglarının güvenilir bir şekilde kuyruklanmasını ve dağıtılmasını sağlar.
+3. **Yapay Zeka Tüketicisi ve Ajan (Python)**: Logları tüketir, Qdrant vektör veritabanı üzerinden geçmiş benzer vakaları sorgular (RAG) ve Gemini API ile bağlam odaklı analiz üretir.
+4. **İnsan Onay Mekanizması (Human-in-the-Loop)**: Kritik iyileştirme aksiyonları doğrudan tetiklenmek yerine web tabanlı arayüz üzerinden operatör onayına sunulur.
+5. **Otonom İyileştirme (Docker SDK)**: Onaylanan veya tetiklenen kararlar doğrultusunda konteyner kurtarma operasyonlarını gerçekleştirir ve sonuçları hafızaya kaydeder.
 
 ---
 
-##  Teknoloji Yığını
+## Teknoloji Yığını
 
 * **Dil (Üretici):** Go
-* **Dil (Tüketici / Yapay Zeka Ajanı):** Python
+* **Dil (Tüketici / Ajan):** Python
+* **Web Arayüzü / Sunucu:** FastAPI, Tailwind CSS
+* **Vektör Veritabanı (RAG):** Qdrant
 * **Mesaj Broker:** RabbitMQ
 * **Konteyner Yönetimi:** Docker & Docker SDK for Python
-* **Yapay Zeka:** Google Gemini API (`gemini-3.5-flash`)
-* **Masaüstü Bildirimleri:** `plyer`
-* **Ortam Yönetimi:** `python-dotenv`, `pika`
+* **Yapay Zeka:** Google Gemini API
+* **Ortam Yönetimi:** `python-dotenv`, `pika`, `sentence-transformers`
 
 ---
 
-##  Başlangıç
+## Başlangıç
 
 ### Gereksinimler
 
 * Go (1.18+)
 * Python (3.9+)
 * Docker & Docker Compose
+* Qdrant
 * Gemini API Anahtarı
 
 ### 1. Repoyu Klonlayın
