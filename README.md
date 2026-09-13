@@ -1,48 +1,82 @@
-# LogPulse
+# LogPulse - Autonomous AIOps & Predictive Telemetry Orchestrator
 
-LogPulse; gerçek zamanlı log izleme, yapay zeka destekli kök neden analizi (RCA), vektör tabanlı epizodik hafıza (RAG), ilişkisel sistem telemetrisi ve insan onay mekanizması (Human-in-the-Loop) barındıran kurumsal düzeyde bir AIOps platformudur. 
-
-Go, RabbitMQ, Python, PostgreSQL, Qdrant, Docker SDK ve Google Gemini API kullanılarak dağıtık mimaride geliştirilmiştir.
+LogPulse; mikroservis ekosistemlerinde telemetri akışını izleyen, zaman serisi üzerinde kayan pencere (sliding-window) OLS regresyonu koşturarak bellek sızıntılarını servis çökmeden (OOM) önce tespit eden, PostgreSQL ilişkisel sistem grafı ve Qdrant vektör hafızasını (RAG) harmanlayarak çok boyutlu kök neden analizi (RCA) üreten ve otonom iyileştirmeleri insan onay süzgecinden (Human-in-the-Loop) geçiren kurumsal düzeyde bir AIOps platformudur.
 
 ---
 
-## Mimari ve İş Akışı
+## 🏛️ Mimari ve Veri Akışı
 
-1. **Log Üretici & Metrik Simülatörü (Go)**: Mikroservis loglarını ve donanım telemetrisini (CPU, bellek) simüle ederek RabbitMQ kuyruğuna aktarır.
-2. **Mesaj Kuyruğu (RabbitMQ)**: Dağıtık servis loglarının kayıpsız ve asenkron iletimini sağlar.
-3. **İlişkisel Telemetri Katmanı (PostgreSQL)**: Servis konfigürasyonlarını, donanım limitlerini, zaman serisi hata sıklıklarını (`incident_logs`) ve operatör denetim izlerini (`remediation_audits`) saklar.
-4. **Hibrit Akıllı Ajan (Python & Gemini & Qdrant)**:
-   - **Vektör Hafızası (RAG):** Qdrant üzerinde anlamsal arama yaparak geçmiş benzer çözümleri çeker.
-   - **İlişkisel Sistem Grafı:** PostgreSQL üzerinden servis limitlerini ve son 1 saatteki hata frekansını sorgular (`JOIN`).
-   - Çok boyutlu bağlam ile Gemini üzerinden kök neden tespiti yapar.
-5. **İnsan Onay Mekanizması (Human-in-the-Loop)**: Kritik aksiyonlar doğrudan uygulanmaz; FastAPI ve Tailwind CSS tabanlı dashboard üzerinden operatör onayına sunulur.
-6. **Denetim İzi & Otonom İyileştirme (Docker SDK)**: Operatör onayı sonrası konteyner operasyonları icra edilir ve sonuçlar PostgreSQL denetim tablosuna işlenir.
+```text
+[ Go Producer / Telemetry Simulator ]
+        │ (Kademeli Bellek Sızıntısı & CPU/RAM Telemetrisi)
+        ▼
+[ RabbitMQ Broker ]
+        │ (Asenkron & Güvenilir Mesaj İletimi)
+        ▼
+[ Python AI Agent / SRE Controller ]
+   ├── Predictive Detector ──────► Sliding-Window OLS Regression (Eğim / Slope Hesabı)
+   ├── Qdrant Vector DB ─────────► Epizodik Hafıza (RAG - Cosine Similarity)
+   ├── PostgreSQL Telemetry ─────► İlişkisel Sistem Grafı (Donanım Limitleri, Hata Sıklığı, Denetim İzi)
+   └── Google Gemini API ────────► Gemini 3.6 Flash Çok Boyutlu Kök Neden Analizi (RCA)
+        │
+        ▼
+[ FastAPI Control Plane & Dashboard ]
+   ├── Predictive Warning Card ──► Sarı Yanıp Sönen Erken Uyarı & Time-to-OOM Projeksiyonu
+   ├── Chart.js Dynamic Visualizer ──► Anlık Çift Eksenli CPU / Bellek Takibi
+   └── Operator HITL Console ────────► Operatör Onayı -> Docker SDK Tetikleme -> Audit Kaydı
+   
+### Temel Yetenekler
 
-- **Proaktif Kestirimci Anomali Tespiti (Sliding-Window OLS Regression):** Servislerin çökmesini (OOM) beklemek yerine, ardışık zaman serisi telemetrisi üzerinde en küçük kareler yöntemiyle doğrusal eğim (slope) hesaplanır. Kritik eşiği aşan pozitif eğilimlerde sistem Time-to-OOM (çöküşe kalan süre) projeksiyonu çıkararak proaktif önlem çağrısı üretir.
+* **Dağıtık Telemetri Simülatörü (Go):** Mikroservis yüklerini simüle ederek CPU ve bellek metriklerini RabbitMQ kuyruğuna aktarır; bellek sızıntısı paternlerini kademeli olarak üretir.
+* **Kestirimci Bakım (Sliding-Window OLS Regression):** Çöküşü beklemek yerine son 5 ölçümün doğrusal eğimini ($\beta$) hesaplar; eşik aşıldığında tahmini çöküş süresini (Time-to-OOM) belirleyerek erken uyarı fırlatır.
+* **İlişkisel Telemetri Katmanı (PostgreSQL):** Servis donanım limitlerini (`services`), zaman serisi hatalarını (`incident_logs`) ve operatör müdahalelerini (`remediation_audits`) tek bir ilişkisel modelde birleştirir.
+* **Vektör Hafızası (Qdrant RAG):** Başarılı operasyonel çözümleri `all-MiniLM-L6-v2` embedding modeli ile anlamsal hafızaya kaydeder ve gelecekteki benzer vakalarda ajana bağlam olarak sunar.
+* **İnsan Onay Mekanizması (Human-in-the-Loop):** Kritik altyapı aksiyonları doğrudan icra edilmez; operatörün web paneli üzerinden onaylaması beklenir ve her eylem denetim tablosuna işlenir.
+* **Gerçek Zamanlı Gözlemlenebilirlik:** Çift eksenli Chart.js grafiği ile donanım tüketimi izlenir; `PREDICT_WARN` anında sarı erken uyarı paneli devreye girer.
+
 ---
 
-## Teknoloji Yığını
+## 🛠️ Teknoloji Yığını
 
-* **Diller:** Go, Python, SQL
-* **İlişkisel Veritabanı:** PostgreSQL (Zaman serisi telemetri & Denetim izi)
-* **Vektör Veritabanı:** Qdrant (RAG Hafıza Yönetimi)
+* **Sistem & Backend:** Go, Python, SQL
+* **İlişkisel Veritabanı:** PostgreSQL 15
+* **Vektör Veritabanı:** Qdrant (Distance: Cosine, Vector Size: 384)
 * **Mesaj Broker:** RabbitMQ
 * **Web Arayüzü & API:** FastAPI, Tailwind CSS, Chart.js
-* **Konteyner Orkestrasyonu:** Docker & Docker SDK for Python
-* **Yapay Zeka:** Google Gemini API (`gemini-2.5-flash`), `sentence-transformers`
+* **Altyapı & Orkestrasyon:** Docker & Docker SDK for Python
+* **Yapay Zeka & Embedding:** Google Gemini API (`gemini-3.6-flash`), `sentence-transformers`
 
 ---
 
-## Kurulum ve Başlangıç
+## 🗄️ Veritabanı Şeması (PostgreSQL DDL)
 
-### Gereksinimler
+```sql
+CREATE TABLE IF NOT EXISTS services (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) UNIQUE NOT NULL,
+    max_memory_mb INT NOT NULL DEFAULT 512,
+    max_cpu_percent FLOAT NOT NULL DEFAULT 80.0,
+    healthcheck_url VARCHAR(255),
+    tier VARCHAR(20) DEFAULT 'critical'
+);
 
-* Docker & Docker Compose
-* Go (1.18+)
-* Python (3.9+)
+CREATE TABLE IF NOT EXISTS incident_logs (
+    id SERIAL PRIMARY KEY,
+    service_id INT REFERENCES services(id) ON DELETE CASCADE,
+    level VARCHAR(20) NOT NULL,
+    message TEXT NOT NULL,
+    cpu_usage FLOAT NOT NULL,
+    memory_usage FLOAT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-### 1. Altyapı Konteynerlerini Başlatın
-
-```bash
-# Qdrant ve RabbitMQ konteynerlerinin yanında PostgreSQL'i başlatın
-docker run -d --name logpulse-postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=logpulse -p 5432:5432 postgres:15
+CREATE TABLE IF NOT EXISTS remediation_audits (
+    id SERIAL PRIMARY KEY,
+    incident_id INT REFERENCES incident_logs(id) ON DELETE SET NULL,
+    service_id INT REFERENCES services(id) ON DELETE CASCADE,
+    action_taken VARCHAR(100) NOT NULL,
+    approved_by VARCHAR(50) DEFAULT 'operator_admin',
+    execution_status VARCHAR(20) DEFAULT 'SUCCESS',
+    resolution_time_sec FLOAT DEFAULT 1.2,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
