@@ -18,6 +18,7 @@ Go, RabbitMQ, Python, PostgreSQL, Qdrant, Docker SDK ve Google Gemini API kullan
 5. **İnsan Onay Mekanizması (Human-in-the-Loop)**: Kritik aksiyonlar doğrudan uygulanmaz; FastAPI ve Tailwind CSS tabanlı dashboard üzerinden operatör onayına sunulur.
 6. **Denetim İzi & Otonom İyileştirme (Docker SDK)**: Operatör onayı sonrası konteyner operasyonları icra edilir ve sonuçlar PostgreSQL denetim tablosuna işlenir.
 
+- **Proaktif Kestirimci Anomali Tespiti (Sliding-Window OLS Regression):** Servislerin çökmesini (OOM) beklemek yerine, ardışık zaman serisi telemetrisi üzerinde en küçük kareler yöntemiyle doğrusal eğim (slope) hesaplanır. Kritik eşiği aşan pozitif eğilimlerde sistem Time-to-OOM (çöküşe kalan süre) projeksiyonu çıkararak proaktif önlem çağrısı üretir.
 ---
 
 ## Teknoloji Yığını

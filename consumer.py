@@ -10,7 +10,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from sentence_transformers import SentenceTransformer
 
-# PostgreSQL Çok Tablolu Veri Erişim Katmanı
+from detector import PredictiveAnomalyDetector
 from db import log_incident_and_get_context
 
 load_dotenv()
@@ -20,9 +20,11 @@ if not API_KEY:
     raise ValueError("GEMINI_API_KEY bulunamadı! Lütfen .env dosyasını kontrol edin.")
 
 genai.configure(api_key=API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
-
+model = genai.GenerativeModel("gemini-3.6-flash")
 DASHBOARD_API_URL = "http://localhost:8000/api/logs"
+
+# Proaktif Anomali ve Bellek Sızıntısı Detektörü (Global Tanım)
+anomaly_detector = PredictiveAnomalyDetector(window_size=5, slope_threshold=1.2, mem_critical_threshold=75.0)
 
 # Qdrant ve Embedding Modeli (RAG Vektör Hafızası)
 try:
@@ -79,20 +81,23 @@ def search_memory(error_message):
         return []
     try:
         vector = embedder.encode(error_message).tolist()
-        hits = qdrant_client.search(
+        
+        # Yeni Qdrant API: query_points metodu kullanılır
+        response = qdrant_client.query_points(
             collection_name=COLLECTION_NAME,
-            query_vector=vector,
+            query=vector,
             limit=2
         )
         memories = []
-        for hit in hits:
-            if hit.score > 0.70:
-                memories.append(f"- Geçmiş Hata: {hit.payload.get('message')} | Çözüm: {hit.payload.get('solution')}")
+        for hit in response.points:
+            if hit.score and hit.score > 0.70:
+                payload = hit.payload or {}
+                memories.append(f"- Geçmiş Hata: {payload.get('message')} | Çözüm: {payload.get('solution')}")
         return memories
     except Exception as e:
         print(f"[HATA] Hafıza sorgulanırken hata oluştu: {e}")
         return []
-
+        
 def save_memory(error_message, solution_text):
     if not qdrant_client or not embedder:
         return
@@ -124,12 +129,54 @@ def analyze_log_with_ai(log_data):
 
     print(f"\n[CONSUMER] Log Alındı -> Servis: {service} | Seviye: {log_level} | CPU: %{cpu} | RAM: %{memory}")
 
+    # 1. Proaktif Kestirimci Anomali Kontrolü (Sliding Window OLS Eğim Analizi)
+    anomaly_result = anomaly_detector.evaluate_telemetry(service, memory)
+    if anomaly_result["is_anomaly"]:
+        print(f"\n🚨 [PROAKTİF TAHMİN] {service} üzerinde bellek sızıntısı (Memory Leak) tespit edildi!")
+        print(f"📈 Artış Eğimi: +%{anomaly_result['slope']}/adım | Anlık RAM: %{anomaly_result['current_memory']}")
+        print(f"⏳ Tahmini OOM Süresi: Yaklaşık {anomaly_result['steps_to_oom']} adım sonra!")
+
+        proactive_prompt = f"""
+Sen LogPulse otonom SRE ajanısın. Servis henüz ÇÖKMEMİŞTİR ancak kayan pencere (sliding window) regresyon analizi ile deterministik bir BELLEK SIZINTISI (Memory Leak) tespit edildi.
+
+[PROAKTİF TELEMETRİ METRİKLERİ]
+- Servis: {service}
+- Anlık Bellek Tüketimi: %{anomaly_result['current_memory']}
+- Bellek Artış Eğimi (Slope): +%{anomaly_result['slope']} birim/ölçüm
+- Son 5 Ölçüm Geçmişi: {anomaly_result['history']}
+- Tahmini OOM (Out-of-Memory) Çöküş Eşiği: Yaklaşık {anomaly_result['steps_to_oom']} adım sonra
+
+Sistem OOM killer tarafından kilitlenmeden önce operatöre acil proaktif önlem planı üret:
+1. Tahmini Kök Neden: (Bellek neden düzenli birikiyor?)
+2. Proaktif İyileştirme (Preventive Action): (Graceful restart, connection pool drain veya GC tetikleme planı)
+"""
+        try:
+            response = model.generate_content(proactive_prompt)
+            proactive_analysis = f" [PROAKTİF UYARI - ÇÖKME ÖNLENDİ]\n{response.text}"
+            print("\n---  GEMINI PROAKTİF KESTİRİMCİ RAPORU ---")
+            print(proactive_analysis)
+            print("-------------------------------------------\n")
+
+            predictive_log = dict(log_data)
+            predictive_log["level"] = "PREDICT_WARN"
+            predictive_log["message"] = f"Proaktif Uyarı: Bellek sızıntısı eğilimi! Tahmini OOM: ~{anomaly_result['steps_to_oom']} adım."
+            send_to_dashboard(predictive_log, ai_analysis=proactive_analysis)
+
+            send_windows_notification(
+                title=f" Proaktif Anomali: {service}",
+                message=f"Bellek sızıntısı tespit edildi! Servis çökmeden müdahale öneriliyor."
+            )
+            return
+        except Exception as e:
+            print(f"[PROAKTİF ANALİZ HATA] {e}")
+
+    # Normal akış: Hata yoksa ve anomali görülmediyse analiz atlanır
     if log_level == "INFO":
-        print("[AI BYPASS] Normal işlem logu, analiz atlandı.")
+        print("[AI BYPASS] Normal işlem logu, telemetri stabil.")
         send_to_dashboard(log_data, ai_analysis=None)
         return
 
-    # 1. PostgreSQL Çok Tablolu İlişkisel Bağlamı (JOIN) Çek
+    # 2. PostgreSQL Çok Tablolu İlişkisel Bağlamı (JOIN) Çek
     db_context_text = "Veritabanı ilişkisel bağlamı alınamadı."
     try:
         incident_id, context = log_incident_and_get_context(
@@ -146,11 +193,11 @@ def analyze_log_with_ai(log_data):
     except Exception as e:
         print(f"[DB UYARI] PostgreSQL kayıt/bağlam hatası: {e}")
 
-    # 2. Qdrant Vektör Hafızasını Tara (RAG)
+    # 3. Qdrant Vektör Hafızasını Tara (RAG)
     past_memories = search_memory(message)
     memory_context = "\n".join(past_memories) if past_memories else "Benzer bir geçmiş vaka bulunamadı (İlk kayıt)."
 
-    # 3. İlişkisel Graf + Vektör Hafızası ile Hibrit Prompt Oluştur
+    # 4. İlişkisel Graf + Vektör Hafızası ile Hibrit Prompt Oluştur
     prompt = f"""
 Sen LogPulse otonom AIOps ajanısın. Hem uzun vadeli vektör hafızasına (Qdrant RAG) hem de kurumsal ilişkisel sistem veritabanına (PostgreSQL) erişimin var.
 
@@ -180,16 +227,13 @@ Yukarıdaki donanım eşiklerini, son 1 saatteki hata sıklığını ve geçmiş
         print(ai_analysis_text)
         print("----------------------------------------\n")
         
-        # Dashboard'a operatör onayına sunmak üzere gönder
         send_to_dashboard(log_data, ai_analysis=ai_analysis_text)
 
-        # Windows Masaüstü Bildirimi Gönder
         send_windows_notification(
-            title=f"⚠️ LogPulse Olayı: {service}",
-            message=f"Hata frekansı değerlendirildi. İnsan onayı bekleniyor!"
+            title=f" LogPulse Olayı: {service}",
+            message="Hata frekansı değerlendirildi. İnsan onayı bekleniyor!"
         )
 
-        # Çözüm önerisini vektör hafızasına kaydet
         save_memory(message, ai_analysis_text)
             
     except Exception as e:
@@ -209,7 +253,7 @@ def main():
     channel = connection.channel()
     channel.queue_declare(queue='log_queue', durable=True)
 
-    print('[*] LogPulse PostgreSQL + RAG Hibrit AI Consumer aktif. Kuyruk dinleniyor...')
+    print('[*] LogPulse Kestirimci (Predictive) + Hibrit AI Consumer aktif. Kuyruk dinleniyor...')
     channel.basic_qos(prefetch_count=1)
     channel.basic_consume(queue='log_queue', on_message_callback=callback)
     channel.start_consuming()

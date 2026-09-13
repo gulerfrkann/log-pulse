@@ -45,33 +45,40 @@ func main() {
 	)
 	failOnError(err, "Kuyruk oluşturulamadı")
 
-	fmt.Println("🚀 LogPulse Agent başlatıldı. Normal ve Hata logları kuyruğa akıyor...")
+	fmt.Println("🚀 LogPulse Agent başlatıldı. Proaktif Telemetri & Bellek Akışı devrede...")
 
 	counter := 0
+	simulatedMemory := 71.0 // Bellek sızıntısı başlangıç noktası
+
 	for {
 		counter++
 		var logData LogPayload
 
-		// Her 4 döngüde bir sisteme hata (ERROR) simülasyonu sokalım
-		if counter%4 == 0 {
+		// Kademeli bellek sızıntısı simülasyonu: Her adımda RAM %2.8 artar
+		simulatedMemory += 2.8
+
+		// Bellek %93'ü aştığında sızıntı sonucu gerçek bir OOM çöküşü simüle et ve sıfırla
+		if simulatedMemory >= 93.0 {
 			logData = LogPayload{
 				Timestamp:   time.Now().Format(time.RFC3339),
 				Hostname:    "server-node-01",
 				Level:       "ERROR",
 				Service:     "auth-api",
-				Message:     "Database connection pool exhausted! Out of memory error occurred while processing heavy concurrent requests.",
-				CPUUsage:    94.8,
-				MemoryUsage: 91.2,
+				Message:     "Out of Memory (OOMKilled)! Pod memory limit exceeded.",
+				CPUUsage:    95.2,
+				MemoryUsage: simulatedMemory,
 			}
+			simulatedMemory = 71.0 // Çöküş sonrası belleği sıfırla
 		} else {
+			// Henüz ERROR yok, sistem INFO seviyesinde ama RAM tırmanıyor (Sızıntı Aşaması)
 			logData = LogPayload{
 				Timestamp:   time.Now().Format(time.RFC3339),
 				Hostname:    "server-node-01",
 				Level:       "INFO",
 				Service:     "auth-api",
-				Message:     "Health check OK, system operating normally.",
-				CPUUsage:    14.2,
-				MemoryUsage: 48.6,
+				Message:     fmt.Sprintf("Worker active. Routine health check OK. Memory at %.1f%%", simulatedMemory),
+				CPUUsage:    24.5,
+				MemoryUsage: simulatedMemory,
 			}
 		}
 
@@ -96,7 +103,7 @@ func main() {
 		if err != nil {
 			fmt.Printf("Mesaj kuyruğa gönderilemedi: %v\n", err)
 		} else {
-			fmt.Printf("[PRODUCER] (%s) Kuyruğa Gönderildi: Sev=%s\n", logData.Service, logData.Level)
+			fmt.Printf("[PRODUCER] (%s) Telemetri İletildi: Sev=%s | RAM=%%%.1f\n", logData.Service, logData.Level, logData.MemoryUsage)
 		}
 
 		time.Sleep(3 * time.Second)
