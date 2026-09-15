@@ -4,7 +4,7 @@ LogPulse; mikroservis ekosistemlerinde telemetri akışını izleyen, zaman seri
 
 ---
 
-## 🏛️ Mimari ve Veri Akışı
+##  Mimari ve Veri Akışı
 
 ```text
 [ Go Producer / Telemetry Simulator ]
@@ -36,7 +36,7 @@ LogPulse; mikroservis ekosistemlerinde telemetri akışını izleyen, zaman seri
 
 ---
 
-## 🛠️ Teknoloji Yığını
+##  Teknoloji Yığını
 
 * **Sistem & Backend:** Go, Python, SQL
 * **İlişkisel Veritabanı:** PostgreSQL 15
@@ -48,7 +48,7 @@ LogPulse; mikroservis ekosistemlerinde telemetri akışını izleyen, zaman seri
 
 ---
 
-## 🗄️ Veritabanı Şeması (PostgreSQL DDL)
+##  Veritabanı Şeması (PostgreSQL DDL)
 
 ```sql
 CREATE TABLE IF NOT EXISTS services (
